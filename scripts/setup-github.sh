@@ -9,7 +9,7 @@ SSH_KEY="${SSH_KEY:-$HOME/.ssh/devops_projekt}"
 
 if [ -f .env ]; then set -a; source .env; set +a; fi
 
-gh auth status >/dev/null 2>&1 || { echo "Najpierw zaloguj się: gh auth login"; exit 1; }
+gh api user >/dev/null 2>&1 || { echo "Najpierw zaloguj się: gh auth login"; exit 1; }
 OWNER=$(gh api user -q .login)
 REPO="$OWNER/$REPO_NAME"
 
