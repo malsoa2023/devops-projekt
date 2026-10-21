@@ -1,0 +1,23 @@
+# Nakładka do uruchomienia całego stosu lokalnie (make local).
+# Buduje obraz z kodu zamiast pobierać go z rejestru i wystawia stronę na http://localhost:8080
+services:
+  app:
+    image: devops-projekt-app:local
+    build:
+      context: ../app
+      args:
+        APP_VERSION: local
+
+  caddy:
+    ports: !override
+      - "8080:80"
+
+  # Docker Desktop (macOS/Windows) nie obsługuje montowania z propagacją "rslave"
+  node-exporter:
+    volumes: !override
+      - /:/host:ro
+
+  alertmanager:
+    volumes: !override
+      - ./alertmanager/alertmanager.local.yml:/etc/alertmanager/alertmanager.yml:ro
+      - alertmanager_data:/alertmanager

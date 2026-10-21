@@ -1,0 +1,7 @@
+# Konfiguracja do uruchomienia lokalnego: alerty są widoczne w Alertmanagerze, ale nigdzie nie wysyłane.
+# Na serwerze Ansible generuje alertmanager.yml z odbiorcą Telegram.
+route:
+  receiver: "null"
+
+receivers:
+  - name: "null"

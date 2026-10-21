@@ -1,0 +1,223 @@
+# Pipeline CI/CD
+#  - push na dowolną gałąź: testy -> build obrazu -> publikacja w GHCR -> test obrazu
+#  - push na main:          dodatkowo automatyczne wdrożenie na serwer AWS
+#  - zawsze:                powiadomienie o wyniku na Telegram
+name: CI/CD
+
+on:
+  push:
+    branches: ["**"]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  test:
+    name: Testy i lint aplikacji
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: app
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: app/requirements*.txt
+
+      - name: Zainstaluj zależności
+        run: pip install -r requirements.txt -r requirements-dev.txt
+
+      - name: Lint (ruff)
+        run: ruff check .
+
+      - name: Testy jednostkowe (pytest)
+        run: pytest -v
+
+  iac:
+    name: Walidacja Terraform i Ansible
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: hashicorp/setup-terraform@v3
+
+      - name: terraform fmt
+        run: terraform -chdir=terraform fmt -check -recursive
+
+      - name: terraform validate
+        run: |
+          terraform -chdir=terraform init -backend=false -input=false
+          terraform -chdir=terraform validate
+
+      - name: ansible syntax-check
+        run: |
+          pip install ansible-core
+          cd ansible && ansible-playbook -i localhost, site.yml --syntax-check
+
+  build:
+    name: Build i publikacja obrazu
+    needs: [test, iac]
+    runs-on: ubuntu-latest
+    outputs:
+      image: ${{ steps.image.outputs.name }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Nazwa obrazu (małe litery)
+        id: image
+        run: echo "name=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Logowanie do GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Tagi obrazu
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ steps.image.outputs.name }}
+          tags: |
+            type=sha,format=long,prefix=
+            type=ref,event=branch
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Build i push
+        uses: docker/build-push-action@v6
+        with:
+          context: app
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: APP_VERSION=${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Test integracyjny opublikowanego obrazu
+        env:
+          IMAGE: ${{ steps.image.outputs.name }}:${{ github.sha }}
+        run: |
+          docker run -d --name smoke -p 8000:8000 "$IMAGE"
+          curl -sf --retry 10 --retry-connrefused --retry-delay 2 http://localhost:8000/health
+          VERSION=$(curl -sf http://localhost:8000/api/info | jq -r .version)
+          echo "Wersja w obrazie: $VERSION"
+          test "$VERSION" = "$GITHUB_SHA"
+          curl -sf http://localhost:8000/metrics | grep -q http_requests_total
+          docker rm -f smoke
+
+  deploy:
+    name: Wdrożenie na AWS
+    needs: build
+    # Tylko gałąź main i tylko gdy serwer istnieje (zmienna DEPLOY_ENABLED ustawiana przez scripts/setup-github.sh)
+    if: github.ref == 'refs/heads/main' && vars.DEPLOY_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    environment:
+      name: production
+      url: ${{ steps.verify.outputs.url }}
+    concurrency:
+      group: production
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Zainstaluj Ansible
+        run: pip install ansible-core
+
+      - name: Przygotuj klucz SSH
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+          SERVER_HOST: ${{ secrets.SERVER_HOST }}
+        run: |
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H "$SERVER_HOST" >> ~/.ssh/known_hosts
+
+      - name: Wdróż (ansible-playbook)
+        working-directory: ansible
+        env:
+          IMAGE: ${{ needs.build.outputs.image }}
+          IMAGE_TAG: ${{ github.sha }}
+          SITE_ADDRESS: ${{ vars.SITE_ADDRESS }}
+          GRAFANA_ADMIN_PASSWORD: ${{ secrets.GRAFANA_ADMIN_PASSWORD }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          REGISTRY_USER: ${{ github.actor }}
+          REGISTRY_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SERVER_HOST: ${{ secrets.SERVER_HOST }}
+        run: ansible-playbook -i "$SERVER_HOST," --private-key ~/.ssh/deploy_key site.yml
+
+      - name: Sprawdź wdrożoną wersję
+        id: verify
+        env:
+          SERVER_HOST: ${{ secrets.SERVER_HOST }}
+          SITE_ADDRESS: ${{ vars.SITE_ADDRESS }}
+        run: |
+          if [ -n "$SITE_ADDRESS" ] && [ "$SITE_ADDRESS" != ":80" ]; then URL="https://$SITE_ADDRESS"; else URL="http://$SERVER_HOST"; fi
+          VERSION=$(curl -sfL --retry 10 --retry-all-errors --retry-delay 3 "$URL/api/info" | jq -r .version)
+          echo "Wersja na produkcji: $VERSION"
+          test "$VERSION" = "$GITHUB_SHA"
+          echo "url=$URL" >> "$GITHUB_OUTPUT"
+
+  notify:
+    name: Powiadomienie Telegram
+    needs: [test, iac, build, deploy]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Wyślij wynik na Telegram
+        env:
+          TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          TEST: ${{ needs.test.result }}
+          IAC: ${{ needs.iac.result }}
+          BUILD: ${{ needs.build.result }}
+          DEPLOY: ${{ needs.deploy.result }}
+          COMMIT_MSG: ${{ github.event.head_commit.message }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          if [ -z "$TOKEN" ] || [ -z "$CHAT_ID" ]; then
+            echo "::warning::Brak sekretów TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID - pomijam powiadomienie"
+            exit 0
+          fi
+
+          label() {
+            case "$1" in
+              success) echo "✅ sukces" ;;
+              failure) echo "❌ błąd" ;;
+              cancelled) echo "⚪ anulowane" ;;
+              skipped) echo "⏭ pominięte" ;;
+              *) echo "$1" ;;
+            esac
+          }
+
+          if [[ "$TEST $IAC $BUILD $DEPLOY" == *failure* || "$TEST $IAC $BUILD $DEPLOY" == *cancelled* ]]; then
+            HEADER="❌ Pipeline NIEUDANY"
+          elif [ "$DEPLOY" = "success" ]; then
+            HEADER="🚀 Wdrożono na produkcję"
+          else
+            HEADER="✅ Build udany"
+          fi
+
+          TEXT=$(printf '%s\n\nRepozytorium: %s\nGałąź: %s\nCommit: %s %s\nAutor: %s\n\nTesty: %s\nWalidacja IaC: %s\nBuild i publikacja: %s\nWdrożenie: %s\n\n%s' \
+            "$HEADER" "$GITHUB_REPOSITORY" "$GITHUB_REF_NAME" "${GITHUB_SHA::7}" "$(echo "$COMMIT_MSG" | head -1)" "$GITHUB_ACTOR" \
+            "$(label "$TEST")" "$(label "$IAC")" "$(label "$BUILD")" "$(label "$DEPLOY")" "$RUN_URL")
+
+          curl -sf -X POST "https://api.telegram.org/bot${TOKEN}/sendMessage" \
+            --data-urlencode "chat_id=${CHAT_ID}" \
+            --data-urlencode "text=${TEXT}" \
+            --data-urlencode "disable_web_page_preview=true" > /dev/null
+          echo "Wysłano powiadomienie."

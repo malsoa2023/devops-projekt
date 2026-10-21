@@ -1,0 +1,23 @@
+# Wartości czytane ze zmiennych środowiskowych - lokalnie z pliku .env (Makefile), w CI z sekretów GitHuba.
+app_dir: /opt/devops-app
+app_replicas: 2
+swap_size_mb: 2048
+
+app_image: "{{ lookup('env', 'IMAGE') | default('ghcr.io/change-me/devops-projekt', true) }}"
+app_image_tag: "{{ lookup('env', 'IMAGE_TAG') | default('latest', true) }}"
+
+site_address: "{{ lookup('env', 'SITE_ADDRESS') | default(':80', true) }}"
+public_url: >-
+  {{ lookup('env', 'PUBLIC_URL')
+     | default(('https://' ~ site_address) if site_address != ':80' else ('http://' ~ (ansible_host | default(inventory_hostname))), true) }}
+
+grafana_admin_password: "{{ lookup('env', 'GRAFANA_ADMIN_PASSWORD') }}"
+
+telegram_bot_token: "{{ lookup('env', 'TELEGRAM_BOT_TOKEN') }}"
+telegram_chat_id: "{{ lookup('env', 'TELEGRAM_CHAT_ID') }}"
+telegram_enabled: "{{ telegram_bot_token | length > 0 and telegram_chat_id | length > 0 }}"
+
+# Logowanie do rejestru obrazów (potrzebne, gdy pakiet w GHCR jest prywatny)
+registry: ghcr.io
+registry_user: "{{ lookup('env', 'REGISTRY_USER') }}"
+registry_token: "{{ lookup('env', 'REGISTRY_TOKEN') }}"

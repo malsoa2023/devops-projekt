@@ -1,0 +1,90 @@
+- name: Sprawdź wymagane zmienne
+  ansible.builtin.assert:
+    that:
+      - grafana_admin_password | length >= 8
+      - "'change-me' not in app_image"
+    fail_msg: >-
+      Ustaw GRAFANA_ADMIN_PASSWORD (min. 8 znaków) oraz IMAGE (np. ghcr.io/twoj-login/devops-projekt)
+      w pliku .env albo w sekretach GitHuba.
+    quiet: true
+
+- name: Utwórz katalog aplikacji
+  ansible.builtin.file:
+    path: "{{ app_dir }}"
+    state: directory
+    owner: ubuntu
+    group: ubuntu
+    mode: "0755"
+
+- name: Skopiuj definicję stosu i konfigurację monitoringu
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../deploy/"
+    dest: "{{ app_dir }}/"
+    owner: ubuntu
+    group: ubuntu
+    mode: preserve
+  notify: Zrestartuj usługi monitoringu
+
+- name: Wygeneruj plik .env dla Docker Compose
+  ansible.builtin.template:
+    src: env.j2
+    dest: "{{ app_dir }}/.env"
+    owner: ubuntu
+    group: ubuntu
+    mode: "0600"
+
+- name: Wygeneruj konfigurację Alertmanagera (alerty na Telegram)
+  ansible.builtin.template:
+    src: alertmanager.yml.j2
+    dest: "{{ app_dir }}/alertmanager/alertmanager.yml"
+    owner: ubuntu
+    group: ubuntu
+    mode: "0644"
+  notify: Zrestartuj usługi monitoringu
+
+- name: Zaloguj się do rejestru obrazów
+  ansible.builtin.command:
+    cmd: docker login {{ registry }} -u {{ registry_user }} --password-stdin
+    stdin: "{{ registry_token }}"
+  when: registry_token | length > 0
+  changed_when: false
+  no_log: true
+
+- name: Pobierz obrazy kontenerów
+  ansible.builtin.command:
+    cmd: docker compose pull --quiet
+    chdir: "{{ app_dir }}"
+  changed_when: false
+
+- name: Uruchom stos (tylko zmienione kontenery są tworzone na nowo)
+  ansible.builtin.command:
+    cmd: docker compose up -d --remove-orphans
+    chdir: "{{ app_dir }}"
+  register: compose_up
+  changed_when: >-
+    'Started' in compose_up.stderr or 'Recreated' in compose_up.stderr
+    or 'Created' in compose_up.stderr or 'Removed' in compose_up.stderr
+
+- name: Zastosuj zmiany konfiguracji
+  ansible.builtin.meta: flush_handlers
+
+- name: Sprawdź, czy aplikacja odpowiada
+  ansible.builtin.command:
+    cmd: >-
+      docker compose exec -T app python -c
+      "import urllib.request; print(urllib.request.urlopen('http://127.0.0.1:8000/api/info', timeout=3).read().decode())"
+    chdir: "{{ app_dir }}"
+  register: app_check
+  retries: 12
+  delay: 5
+  until: app_check.rc == 0
+  changed_when: false
+
+- name: Usuń nieużywane obrazy
+  ansible.builtin.command: docker image prune -f
+  register: prune
+  changed_when: "'Total reclaimed space: 0B' not in prune.stdout"
+
+- name: Wdrożona wersja
+  ansible.builtin.debug:
+    msg: "{{ app_check.stdout }}"

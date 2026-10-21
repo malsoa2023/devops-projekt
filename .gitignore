@@ -1,0 +1,20 @@
+# Sekrety
+.env
+
+# Terraform
+terraform/.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars
+crash.log
+
+# Ansible (generowany z wyjścia Terraform)
+ansible/inventory.ini
+
+# Python
+.venv/
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+
+.DS_Store

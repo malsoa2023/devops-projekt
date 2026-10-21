@@ -1,0 +1,81 @@
+groups:
+  - name: aplikacja
+    rules:
+      - alert: ReplikaAplikacjiNiedostepna
+        expr: up{job="app"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Replika aplikacji {{ $labels.instance }} nie odpowiada"
+          description: "Prometheus nie może pobrać metryk z repliki od ponad minuty."
+
+      - alert: BrakDzialajacychReplik
+        expr: absent(up{job="app"} == 1)
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Żadna replika aplikacji nie działa"
+          description: "Aplikacja jest całkowicie niedostępna."
+
+      - alert: WysokiOdsetekBledow
+        expr: |
+          sum(rate(http_requests_total{job="app", status=~"5.."}[2m]))
+            / sum(rate(http_requests_total{job="app"}[2m])) > 0.05
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Ponad 5% żądań kończy się błędem 5xx"
+          description: "Aktualny odsetek błędów: {{ $value | humanizePercentage }}"
+
+      - alert: WysokieOpoznienie
+        expr: |
+          histogram_quantile(0.95, sum by (le) (rate(http_request_duration_seconds_bucket{job="app"}[5m]))) > 1
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "95. percentyl czasu odpowiedzi przekracza 1 s"
+          description: "p95 = {{ $value | humanizeDuration }}"
+
+  - name: infrastruktura
+    rules:
+      - alert: CelMonitoringuNiedostepny
+        expr: up{job!="app"} == 0
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Usługa {{ $labels.job }} nie odpowiada"
+          description: "Cel {{ $labels.instance }} jest niedostępny od ponad 2 minut."
+
+      - alert: WysokieUzycieCPU
+        expr: 100 - (avg(rate(node_cpu_seconds_total{mode="idle"}[2m])) * 100) > 85
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Użycie CPU serwera powyżej 85%"
+          description: "Aktualnie: {{ $value | printf \"%.0f\" }}%"
+
+      - alert: MaloPamieci
+        expr: node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes < 0.10
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Mniej niż 10% wolnej pamięci RAM"
+          description: "Dostępne: {{ $value | humanizePercentage }}"
+
+      - alert: MaloMiejscaNaDysku
+        expr: |
+          node_filesystem_avail_bytes{mountpoint="/", fstype!~"tmpfs|overlay"}
+            / node_filesystem_size_bytes{mountpoint="/", fstype!~"tmpfs|overlay"} < 0.15
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Mniej niż 15% wolnego miejsca na dysku"
+          description: "Dostępne: {{ $value | humanizePercentage }}"

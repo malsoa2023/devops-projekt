@@ -1,0 +1,5 @@
+- name: Zrestartuj usługi monitoringu
+  ansible.builtin.command:
+    cmd: docker compose restart caddy prometheus alertmanager grafana loki alloy
+    chdir: "{{ app_dir }}"
+  changed_when: true

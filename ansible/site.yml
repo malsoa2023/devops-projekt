@@ -1,0 +1,23 @@
+# Pełna konfiguracja serwera: system -> Docker -> stos aplikacji i monitoringu.
+# Playbook jest idempotentny: kolejne uruchomienie bez zmian w kodzie nic nie zmienia na serwerze.
+- name: Konfiguracja serwera aplikacji
+  hosts: all
+  become: true
+  gather_facts: false
+
+  pre_tasks:
+    - name: Czekaj, aż serwer będzie dostępny przez SSH
+      ansible.builtin.wait_for_connection:
+        timeout: 300
+
+    - name: Zbierz informacje o systemie
+      ansible.builtin.setup:
+
+    - name: Czekaj na zakończenie pierwszego uruchomienia (cloud-init)
+      ansible.builtin.command: cloud-init status --wait
+      changed_when: false
+
+  roles:
+    - common
+    - docker
+    - stack

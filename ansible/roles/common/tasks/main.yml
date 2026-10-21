@@ -1,0 +1,48 @@
+- name: Zainstaluj podstawowe pakiety
+  ansible.builtin.apt:
+    name:
+      - ca-certificates
+      - curl
+      - htop
+      - jq
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+    lock_timeout: 300
+
+# Mała instancja ma 1 GB RAM - swap chroni przed zabiciem kontenerów przy braku pamięci
+- name: Utwórz plik swap
+  ansible.builtin.command: fallocate -l {{ swap_size_mb }}M /swapfile
+  args:
+    creates: /swapfile
+  register: swap_file
+
+- name: Ustaw uprawnienia pliku swap
+  ansible.builtin.file:
+    path: /swapfile
+    mode: "0600"
+
+- name: Sformatuj plik swap
+  ansible.builtin.command: mkswap /swapfile
+  when: swap_file is changed
+
+- name: Sprawdź aktywny swap
+  ansible.builtin.command: swapon --show=NAME --noheadings
+  register: swap_status
+  changed_when: false
+
+- name: Włącz swap
+  ansible.builtin.command: swapon /swapfile
+  when: "'/swapfile' not in swap_status.stdout"
+
+- name: Włączaj swap po restarcie
+  ansible.builtin.lineinfile:
+    path: /etc/fstab
+    line: /swapfile none swap sw 0 0
+
+- name: Ogranicz skłonność systemu do używania swapu
+  ansible.builtin.copy:
+    dest: /etc/sysctl.d/60-swappiness.conf
+    content: "vm.swappiness = 10\n"
+    mode: "0644"
+  notify: Przeładuj sysctl
