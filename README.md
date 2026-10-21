@@ -21,6 +21,7 @@ graph LR
     dev[Programista] -- git push --> gh[GitHub]
     gh --> ci[GitHub Actions]
     ci -- testy, build --> ghcr[(GHCR<br/>obrazy Docker)]
+    ci -- "terraform apply (stan w S3)" --> aws
     ci -- "main: ansible-playbook" --> ec2
     ci -- wynik --> tg[Telegram]
 
@@ -54,7 +55,8 @@ deploy/                  stos uruchamiany na serwerze (docker-compose.yml) i kon
 terraform/               infrastruktura AWS
 ansible/                 konfiguracja serwera: role common (swap, pakiety), docker, stack (wdrożenie)
 .github/workflows/       pipeline CI/CD
-scripts/                 setup-github.sh (repo + sekrety), demo-traffic.sh (ruch do demo)
+scripts/                 setup-github.sh (repo, klucz SSH), demo-traffic.sh (ruch do demo), telegram-chat-id.sh
+.github/actions/         wspólne kroki: terraform-init (stan w S3), telegram
 docs/                    instrukcja zakładania kont, scenariusz obrony
 Makefile                 wszystkie komendy w jednym miejscu (make help)
 ```
@@ -80,31 +82,37 @@ graph LR
 
 ## Wdrożenie od zera
 
-Wymagane narzędzia: `git`, `docker`, `terraform`, `ansible`, `aws` (AWS CLI), `gh` (GitHub CLI).
-Zakładanie kont i kluczy opisuje [docs/KONFIGURACJA-KONT.md](docs/KONFIGURACJA-KONT.md).
+Wszystko, co dotyka chmury, działa w **GitHub Actions**. Klucze AWS, token Telegrama i hasła są zapisane wyłącznie
+w GitHub Secrets, na komputerze nie ma żadnych kluczy, haseł ani stanu Terraformu (stan trzymany jest w S3).
+Zakładanie kont i dodawanie sekretów opisuje [docs/KONFIGURACJA-KONT.md](docs/KONFIGURACJA-KONT.md).
 
 ```bash
-cp .env.example .env      # uzupełnij wartości
-make github               # repozytorium na GitHubie + sekrety; pierwszy push buduje obraz
-git push -u origin main
-make up                   # Terraform (AWS) + Ansible (serwer + aplikacja) - jedna komenda
-make github               # dopisuje adres serwera i klucz SSH - od teraz każdy push na main wdraża
+make github   # repozytorium, klucz SSH do wdrożeń (od razu do GitHuba), kontrola sekretów
+make up       # workflow "Infrastruktura": Terraform (AWS) + Ansible (serwer + aplikacja)
 ```
 
-`make up` jest **idempotentne**: ponowne uruchomienie bez zmian w kodzie daje
-`No changes` w Terraformie i `changed=0` w Ansible.
+To samo bez terminala: **Actions → Infrastruktura → Run workflow → apply**.
+Od tej chwili każdy push na `main` sam wdraża nową wersję.
 
-Najważniejsze komendy (`make help` pokazuje wszystkie):
+Infrastruktura jest **idempotentna**: ponowne uruchomienie bez zmian w kodzie daje
+`No changes` w Terraformie i `changed=0` w Ansible.
 
 | Komenda | Co robi |
 |---|---|
+| `make github` | Przygotowuje repozytorium do CI/CD |
 | `make up` | Tworzy infrastrukturę i wdraża wszystko od zera |
-| `make deploy` | Tylko konfiguracja serwera i wdrożenie (Ansible) |
-| `make output` | Adresy aplikacji, Grafany i polecenie SSH |
-| `make tunnel` | Prometheus i Alertmanager przez tunel SSH (localhost:9090 / 9093) |
 | `make down` | Usuwa całą infrastrukturę AWS |
-| `make local` | Cały stos lokalnie w Dockerze: http://localhost:8080 |
+| `make status` | Ostatnie przebiegi pipeline'ów |
+| `make local` | Cały stos lokalnie w Dockerze (bez chmury i sekretów): http://localhost:8080 |
 | `make test` / `make lint` | Testy i walidacja |
+
+Workflowy:
+
+| Plik | Kiedy | Co robi |
+|---|---|---|
+| `ci-cd.yml` | każdy push | testy, walidacja IaC, build i publikacja obrazu; na `main` także wdrożenie |
+| `infra.yml` | ręcznie (`apply` / `destroy`) | Terraform + pierwsze wdrożenie albo usunięcie infrastruktury |
+| `deploy.yml` | wywoływany przez oba powyższe | Ansible na serwerze i weryfikacja wersji |
 
 ## Monitoring i logi
 
@@ -130,16 +138,16 @@ Najważniejsze komendy (`make help` pokazuje wszystkie):
 
 ## Bezpieczeństwo i koszty
 
-* Sekrety tylko w `.env` (poza repozytorium) i w GitHub Secrets; Ansible nie loguje tokenów.
-* SSH wyłącznie kluczem; Prometheus i Alertmanager słuchają tylko na `127.0.0.1` (dostęp tunelem SSH).
+* Sekrety wyłącznie w GitHub Secrets; żadne nie są zapisane na komputerze ani w repozytorium, a Ansible nie loguje tokenów.
+* Stan Terraformu w S3 (szyfrowany, wersjonowany, z blokadą), ID konta AWS maskowane w logach.
+* SSH wyłącznie kluczem, który istnieje tylko w GitHub Secrets; Prometheus i Alertmanager słuchają tylko na `127.0.0.1`.
 * Dysk szyfrowany, IMDSv2, kontener aplikacji działa jako użytkownik bez uprawnień roota.
-* HTTPS: ustaw `SITE_ADDRESS` na domenę z `make output` (np. `3-120-45-67.sslip.io`); Caddy sam pobierze certyfikat.
+* HTTPS: ustaw zmienną repozytorium `SITE_ADDRESS` na domenę `tls_domain` z podsumowania workflow Infrastruktura (np. `3-120-45-67.sslip.io`); Caddy sam pobierze certyfikat.
 * **Koszt:** t3.micro, 20 GB gp3 i publiczny adres IP mieszczą się w darmowym pakiecie AWS (Free Plan: kredyty
   dla nowych kont). `cpu_credits = "standard"` wyklucza dopłaty za CPU, a budżet AWS wysyła e-mail po przekroczeniu
   1 USD. GitHub Actions i GHCR są darmowe dla publicznych repozytoriów. Po obronie: `make down`.
 
 ## Ograniczenia i możliwe rozszerzenia
 
-* Stan Terraformu trzymany lokalnie; w zespole należałoby przenieść go do S3 z blokadą (DynamoDB / S3 lockfile).
 * Jeden serwer: repliki chronią przed awarią procesu, nie całej maszyny. Kolejny krok to Auto Scaling Group + ALB
   albo Kubernetes (EKS / k3s), co kosztuje więcej niż darmowy pakiet.

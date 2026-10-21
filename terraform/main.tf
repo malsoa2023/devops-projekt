@@ -107,7 +107,7 @@ resource "aws_vpc_security_group_egress_rule" "all" {
 
 resource "aws_key_pair" "deployer" {
   key_name   = "${var.project_name}-key"
-  public_key = file(pathexpand(var.ssh_public_key_path))
+  public_key = var.ssh_public_key
 }
 
 resource "aws_instance" "app" {

@@ -1,5 +1,14 @@
 terraform {
-  required_version = ">= 1.6"
+  required_version = ">= 1.10"
+
+  # Stan w S3 (bucket tworzy workflow infra.yml), blokada przez plik w S3.
+  # Nazwa bucketu podawana przy init: -backend-config="bucket=..."
+  backend "s3" {
+    key          = "devops-projekt/terraform.tfstate"
+    region       = "eu-central-1"
+    encrypt      = true
+    use_lockfile = true
+  }
 
   required_providers {
     aws = {

@@ -1,0 +1,89 @@
+# Wspólny etap wdrożenia - wywoływany przez CI/CD (push na main) i przez workflow Infrastruktura.
+name: Wdrożenie
+
+on:
+  workflow_call:
+    inputs:
+      image_tag:
+        description: Tag obrazu do wdrożenia (SHA commita albo latest)
+        type: string
+        required: true
+    outputs:
+      url:
+        description: Adres wdrożonej aplikacji
+        value: ${{ jobs.deploy.outputs.url }}
+
+jobs:
+  deploy:
+    name: Ansible na serwer AWS
+    runs-on: ubuntu-latest
+    environment:
+      name: production
+      url: ${{ steps.verify.outputs.url }}
+    concurrency:
+      group: production
+      cancel-in-progress: false
+    outputs:
+      url: ${{ steps.verify.outputs.url }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: eu-central-1
+          mask-aws-account-id: true
+
+      - uses: ./.github/actions/terraform-init
+
+      - name: Adres serwera (z Terraform output)
+        id: server
+        run: echo "ip=$(terraform -chdir=terraform output -raw public_ip)" >> "$GITHUB_OUTPUT"
+
+      - name: chat_id Telegrama
+        id: telegram
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: echo "chat_id=$(./scripts/telegram-chat-id.sh)" >> "$GITHUB_OUTPUT"
+
+      - name: Zainstaluj Ansible
+        run: pip install ansible-core
+
+      - name: Klucz SSH
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+        run: |
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+
+      - name: ansible-playbook
+        working-directory: ansible
+        env:
+          IMAGE_TAG: ${{ inputs.image_tag }}
+          SITE_ADDRESS: ${{ vars.SITE_ADDRESS }}
+          GRAFANA_ADMIN_PASSWORD: ${{ secrets.GRAFANA_ADMIN_PASSWORD }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ steps.telegram.outputs.chat_id }}
+          REGISTRY_USER: ${{ github.actor }}
+          REGISTRY_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SERVER_IP: ${{ steps.server.outputs.ip }}
+        run: |
+          export IMAGE="ghcr.io/${GITHUB_REPOSITORY,,}"
+          ansible-playbook -i "$SERVER_IP," --private-key ~/.ssh/deploy_key site.yml
+
+      - name: Sprawdź wdrożoną wersję
+        id: verify
+        env:
+          SERVER_IP: ${{ steps.server.outputs.ip }}
+          SITE_ADDRESS: ${{ vars.SITE_ADDRESS }}
+          EXPECTED: ${{ inputs.image_tag }}
+        run: |
+          if [ -n "$SITE_ADDRESS" ] && [ "$SITE_ADDRESS" != ":80" ]; then URL="https://$SITE_ADDRESS"; else URL="http://$SERVER_IP"; fi
+          VERSION=$(curl -sfL --retry 10 --retry-all-errors --retry-delay 3 "$URL/api/info" | jq -r .version)
+          echo "Wersja na produkcji: $VERSION"
+          if [ "$EXPECTED" != "latest" ]; then test "$VERSION" = "$EXPECTED"; fi
+          echo "url=$URL" >> "$GITHUB_OUTPUT"
+          echo "### 🚀 Aplikacja: $URL  ·  Grafana: $URL/grafana/" >> "$GITHUB_STEP_SUMMARY"

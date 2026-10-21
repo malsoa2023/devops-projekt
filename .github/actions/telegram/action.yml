@@ -1,0 +1,37 @@
+name: Powiadomienie Telegram
+description: Wysyła wiadomość przez bota Telegram (pomija, gdy brak tokenu)
+
+inputs:
+  token:
+    description: Token bota (secrets.TELEGRAM_BOT_TOKEN)
+    required: true
+  chat-id:
+    description: chat_id (secrets.TELEGRAM_CHAT_ID); puste = wykrycie z ostatniej wiadomości do bota
+    default: ""
+  message:
+    description: Treść wiadomości
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      env:
+        TELEGRAM_BOT_TOKEN: ${{ inputs.token }}
+        TELEGRAM_CHAT_ID: ${{ inputs.chat-id }}
+        MESSAGE: ${{ inputs.message }}
+      run: |
+        if [ -z "$TELEGRAM_BOT_TOKEN" ]; then
+          echo "::warning::Brak sekretu TELEGRAM_BOT_TOKEN - pomijam powiadomienie"
+          exit 0
+        fi
+        CHAT_ID=$("$GITHUB_WORKSPACE/scripts/telegram-chat-id.sh")
+        if [ -z "$CHAT_ID" ]; then
+          echo "::warning::Nie znam chat_id - napisz wiadomość do bota albo ustaw sekret TELEGRAM_CHAT_ID"
+          exit 0
+        fi
+        curl -sf -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+          --data-urlencode "chat_id=${CHAT_ID}" \
+          --data-urlencode "text=${MESSAGE}" \
+          --data-urlencode "disable_web_page_preview=true" > /dev/null
+        echo "Wysłano powiadomienie."

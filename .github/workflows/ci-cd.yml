@@ -121,56 +121,12 @@ jobs:
   deploy:
     name: Wdrożenie na AWS
     needs: build
-    # Tylko gałąź main i tylko gdy serwer istnieje (zmienna DEPLOY_ENABLED ustawiana przez scripts/setup-github.sh)
+    # Tylko gałąź main i tylko gdy infrastruktura istnieje (zmienną DEPLOY_ENABLED ustawia scripts/setup-github.sh)
     if: github.ref == 'refs/heads/main' && vars.DEPLOY_ENABLED == 'true'
-    runs-on: ubuntu-latest
-    environment:
-      name: production
-      url: ${{ steps.verify.outputs.url }}
-    concurrency:
-      group: production
-      cancel-in-progress: false
-    steps:
-      - uses: actions/checkout@v5
-
-      - name: Zainstaluj Ansible
-        run: pip install ansible-core
-
-      - name: Przygotuj klucz SSH
-        env:
-          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
-          SERVER_HOST: ${{ secrets.SERVER_HOST }}
-        run: |
-          install -m 700 -d ~/.ssh
-          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/deploy_key
-          chmod 600 ~/.ssh/deploy_key
-          ssh-keyscan -H "$SERVER_HOST" >> ~/.ssh/known_hosts
-
-      - name: Wdróż (ansible-playbook)
-        working-directory: ansible
-        env:
-          IMAGE: ${{ needs.build.outputs.image }}
-          IMAGE_TAG: ${{ github.sha }}
-          SITE_ADDRESS: ${{ vars.SITE_ADDRESS }}
-          GRAFANA_ADMIN_PASSWORD: ${{ secrets.GRAFANA_ADMIN_PASSWORD }}
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-          REGISTRY_USER: ${{ github.actor }}
-          REGISTRY_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          SERVER_HOST: ${{ secrets.SERVER_HOST }}
-        run: ansible-playbook -i "$SERVER_HOST," --private-key ~/.ssh/deploy_key site.yml
-
-      - name: Sprawdź wdrożoną wersję
-        id: verify
-        env:
-          SERVER_HOST: ${{ secrets.SERVER_HOST }}
-          SITE_ADDRESS: ${{ vars.SITE_ADDRESS }}
-        run: |
-          if [ -n "$SITE_ADDRESS" ] && [ "$SITE_ADDRESS" != ":80" ]; then URL="https://$SITE_ADDRESS"; else URL="http://$SERVER_HOST"; fi
-          VERSION=$(curl -sfL --retry 10 --retry-all-errors --retry-delay 3 "$URL/api/info" | jq -r .version)
-          echo "Wersja na produkcji: $VERSION"
-          test "$VERSION" = "$GITHUB_SHA"
-          echo "url=$URL" >> "$GITHUB_OUTPUT"
+    uses: ./.github/workflows/deploy.yml
+    with:
+      image_tag: ${{ github.sha }}
+    secrets: inherit
 
   notify:
     name: Powiadomienie Telegram
@@ -178,22 +134,19 @@ jobs:
     if: always()
     runs-on: ubuntu-latest
     steps:
-      - name: Wyślij wynik na Telegram
+      - uses: actions/checkout@v5
+
+      - name: Treść wiadomości
+        id: message
         env:
-          TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           TEST: ${{ needs.test.result }}
           IAC: ${{ needs.iac.result }}
           BUILD: ${{ needs.build.result }}
           DEPLOY: ${{ needs.deploy.result }}
+          URL: ${{ needs.deploy.outputs.url }}
           COMMIT_MSG: ${{ github.event.head_commit.message }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
-          if [ -z "$TOKEN" ] || [ -z "$CHAT_ID" ]; then
-            echo "::warning::Brak sekretów TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID - pomijam powiadomienie"
-            exit 0
-          fi
-
           label() {
             case "$1" in
               success) echo "✅ sukces" ;;
@@ -207,17 +160,21 @@ jobs:
           if [[ "$TEST $IAC $BUILD $DEPLOY" == *failure* || "$TEST $IAC $BUILD $DEPLOY" == *cancelled* ]]; then
             HEADER="❌ Pipeline NIEUDANY"
           elif [ "$DEPLOY" = "success" ]; then
-            HEADER="🚀 Wdrożono na produkcję"
+            HEADER="🚀 Wdrożono na produkcję: $URL"
           else
             HEADER="✅ Build udany"
           fi
 
-          TEXT=$(printf '%s\n\nRepozytorium: %s\nGałąź: %s\nCommit: %s %s\nAutor: %s\n\nTesty: %s\nWalidacja IaC: %s\nBuild i publikacja: %s\nWdrożenie: %s\n\n%s' \
-            "$HEADER" "$GITHUB_REPOSITORY" "$GITHUB_REF_NAME" "${GITHUB_SHA::7}" "$(echo "$COMMIT_MSG" | head -1)" "$GITHUB_ACTOR" \
-            "$(label "$TEST")" "$(label "$IAC")" "$(label "$BUILD")" "$(label "$DEPLOY")" "$RUN_URL")
+          {
+            echo "text<<EOT"
+            printf '%s\n\nRepozytorium: %s\nGałąź: %s\nCommit: %s %s\nAutor: %s\n\nTesty: %s\nWalidacja IaC: %s\nBuild i publikacja: %s\nWdrożenie: %s\n\n%s\n' \
+              "$HEADER" "$GITHUB_REPOSITORY" "$GITHUB_REF_NAME" "${GITHUB_SHA::7}" "$(echo "$COMMIT_MSG" | head -1)" "$GITHUB_ACTOR" \
+              "$(label "$TEST")" "$(label "$IAC")" "$(label "$BUILD")" "$(label "$DEPLOY")" "$RUN_URL"
+            echo "EOT"
+          } >> "$GITHUB_OUTPUT"
 
-          curl -sf -X POST "https://api.telegram.org/bot${TOKEN}/sendMessage" \
-            --data-urlencode "chat_id=${CHAT_ID}" \
-            --data-urlencode "text=${TEXT}" \
-            --data-urlencode "disable_web_page_preview=true" > /dev/null
-          echo "Wysłano powiadomienie."
+      - uses: ./.github/actions/telegram
+        with:
+          token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          chat-id: ${{ secrets.TELEGRAM_CHAT_ID }}
+          message: ${{ steps.message.outputs.text }}

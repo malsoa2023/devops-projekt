@@ -8,8 +8,6 @@ terraform/.terraform/
 *.tfvars
 crash.log
 
-# Ansible (generowany z wyjścia Terraform)
-ansible/inventory.ini
 
 # Python
 .venv/

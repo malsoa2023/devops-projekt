@@ -22,10 +22,9 @@ variable "root_volume_size" {
   default     = 20
 }
 
-variable "ssh_public_key_path" {
-  description = "Ścieżka do klucza publicznego SSH, którym logujemy się na serwer"
+variable "ssh_public_key" {
+  description = "Klucz publiczny SSH, którym Ansible loguje się na serwer (zmienna SSH_PUBLIC_KEY w GitHubie)"
   type        = string
-  default     = "~/.ssh/devops_projekt.pub"
 }
 
 variable "ssh_allowed_cidr" {

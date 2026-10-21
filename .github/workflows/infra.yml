@@ -1,0 +1,87 @@
+# Infrastruktura od zera jednym kliknięciem (Actions -> Infrastruktura -> Run workflow)
+# albo jedną komendą: gh workflow run infra.yml -f akcja=apply
+#   apply   - Terraform tworzy/aktualizuje AWS, potem Ansible konfiguruje serwer i wdraża aplikację
+#   destroy - usuwa całą infrastrukturę AWS
+name: Infrastruktura
+
+on:
+  workflow_dispatch:
+    inputs:
+      akcja:
+        description: Co zrobić z infrastrukturą
+        type: choice
+        options: [apply, destroy]
+        default: apply
+
+permissions:
+  contents: read
+  packages: read
+
+concurrency:
+  group: infra
+  cancel-in-progress: false
+
+jobs:
+  terraform:
+    name: Terraform ${{ inputs.akcja }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: eu-central-1
+          mask-aws-account-id: true
+
+      - uses: ./.github/actions/terraform-init
+        with:
+          create-bucket: "true"
+
+      - name: terraform ${{ inputs.akcja }}
+        env:
+          TF_VAR_ssh_public_key: ${{ vars.SSH_PUBLIC_KEY }}
+          TF_VAR_budget_email: ${{ vars.BUDGET_EMAIL }}
+          AKCJA: ${{ inputs.akcja }}
+        run: terraform -chdir=terraform "$AKCJA" -input=false -auto-approve
+
+      - name: Podsumowanie
+        if: inputs.akcja == 'apply'
+        run: |
+          {
+            echo '### Infrastruktura'
+            echo '```'
+            terraform -chdir=terraform output
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  deploy:
+    name: Wdrożenie
+    needs: terraform
+    if: inputs.akcja == 'apply'
+    uses: ./.github/workflows/deploy.yml
+    with:
+      image_tag: latest
+    secrets: inherit
+
+  notify:
+    name: Powiadomienie Telegram
+    needs: [terraform, deploy]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: ./.github/actions/telegram
+        with:
+          token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          chat-id: ${{ secrets.TELEGRAM_CHAT_ID }}
+          message: |
+            ${{ (needs.terraform.result == 'success' && needs.deploy.result != 'failure') && '✅' || '❌' }} Infrastruktura: ${{ inputs.akcja }}
+
+            Terraform: ${{ needs.terraform.result }}
+            Wdrożenie: ${{ needs.deploy.result }}
+            ${{ needs.deploy.outputs.url }}
+
+            ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}

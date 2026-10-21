@@ -17,8 +17,3 @@ output "tls_domain" {
   description = "Darmowa domena wskazująca na serwer (do włączenia HTTPS przez SITE_ADDRESS)"
   value       = "${replace(aws_eip.app.public_ip, ".", "-")}.sslip.io"
 }
-
-output "ssh_command" {
-  description = "Polecenie do zalogowania się na serwer"
-  value       = "ssh -i ~/.ssh/devops_projekt ubuntu@${aws_eip.app.public_ip}"
-}

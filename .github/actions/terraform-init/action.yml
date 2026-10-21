@@ -1,0 +1,35 @@
+name: Terraform init
+description: Inicjalizuje Terraform ze stanem w S3 (opcjonalnie tworzy bucket na stan)
+
+inputs:
+  create-bucket:
+    description: Utwórz bucket na stan, jeśli nie istnieje
+    default: "false"
+
+runs:
+  using: composite
+  steps:
+    - uses: hashicorp/setup-terraform@v3
+      with:
+        terraform_wrapper: false
+
+    - name: terraform init
+      shell: bash
+      env:
+        CREATE_BUCKET: ${{ inputs.create-bucket }}
+        REGION: eu-central-1
+      run: |
+        ACCOUNT=$(aws sts get-caller-identity --query Account --output text)
+        echo "::add-mask::$ACCOUNT"
+        BUCKET="devops-projekt-tfstate-${ACCOUNT}"
+
+        if [ "$CREATE_BUCKET" = "true" ] && ! aws s3api head-bucket --bucket "$BUCKET" 2>/dev/null; then
+          echo "Tworzę bucket na stan Terraformu"
+          aws s3api create-bucket --bucket "$BUCKET" --region "$REGION" \
+            --create-bucket-configuration LocationConstraint="$REGION" > /dev/null
+          aws s3api put-bucket-versioning --bucket "$BUCKET" --versioning-configuration Status=Enabled
+          aws s3api put-public-access-block --bucket "$BUCKET" --public-access-block-configuration \
+            BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true
+        fi
+
+        terraform -chdir=terraform init -input=false -backend-config="bucket=$BUCKET"
