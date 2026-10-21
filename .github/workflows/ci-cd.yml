@@ -111,7 +111,7 @@ jobs:
           IMAGE: ${{ steps.image.outputs.name }}:${{ github.sha }}
         run: |
           docker run -d --name smoke -p 8000:8000 "$IMAGE"
-          curl -sf --retry 10 --retry-connrefused --retry-delay 2 http://localhost:8000/health
+          curl -sf --retry 15 --retry-all-errors --retry-delay 2 http://localhost:8000/health
           VERSION=$(curl -sf http://localhost:8000/api/info | jq -r .version)
           echo "Wersja w obrazie: $VERSION"
           test "$VERSION" = "$GITHUB_SHA"
