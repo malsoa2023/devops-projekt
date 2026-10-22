@@ -87,6 +87,25 @@
   until: app_check.rc == 0
   changed_when: false
 
+- name: Sprawdź, czy Prometheus widzi wszystkie usługi
+  ansible.builtin.command:
+    cmd: docker compose exec -T prometheus wget -qO- http://localhost:9090/api/v1/targets?state=active
+    chdir: "{{ app_dir }}"
+  register: targets
+  retries: 12
+  delay: 10
+  until: >-
+    targets.rc == 0
+    and (targets.stdout | from_json).data.activeTargets | length >= app_replicas + 6
+    and (targets.stdout | from_json).data.activeTargets | rejectattr('health', 'equalto', 'up') | list | length == 0
+  changed_when: false
+
+- name: Cele monitoringu
+  ansible.builtin.debug:
+    msg: >-
+      {{ (targets.stdout | from_json).data.activeTargets
+         | map(attribute='labels') | map(attribute='job') | list | join(', ') }} - wszystkie UP
+
 - name: Usuń nieużywane obrazy
   ansible.builtin.command: docker image prune -f
   register: prune
