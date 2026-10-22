@@ -57,7 +57,7 @@ ansible/                 konfiguracja serwera: role common (swap, pakiety), dock
 .github/workflows/       pipeline CI/CD
 scripts/                 setup-github.sh (repo, klucz SSH), demo-traffic.sh (ruch do demo), telegram-chat-id.sh
 .github/actions/         wspólne kroki: terraform-init (stan w S3), telegram
-docs/                    instrukcja zakładania kont, scenariusz obrony
+docs/                    instrukcja zakładania kont i sekretów
 Makefile                 wszystkie komendy w jednym miejscu (make help)
 ```
 
@@ -145,7 +145,7 @@ Workflowy:
 * HTTPS: ustaw zmienną repozytorium `SITE_ADDRESS` na domenę `tls_domain` z podsumowania workflow Infrastruktura (np. `3-120-45-67.sslip.io`); Caddy sam pobierze certyfikat.
 * **Koszt:** t3.micro, 20 GB gp3 i publiczny adres IP mieszczą się w darmowym pakiecie AWS (Free Plan: kredyty
   dla nowych kont). `cpu_credits = "standard"` wyklucza dopłaty za CPU. Opcjonalny budżet AWS (zmienna `BUDGET_EMAIL`)
-  wysyła e-mail po przekroczeniu 1 USD. GitHub Actions i GHCR są darmowe dla publicznych repozytoriów. Po obronie: `make down`.
+  wysyła e-mail po przekroczeniu 1 USD. GitHub Actions i GHCR są darmowe dla publicznych repozytoriów. Po zakończeniu: `make down`.
 
 ## Ograniczenia i możliwe rozszerzenia
 
