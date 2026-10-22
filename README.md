@@ -7,7 +7,7 @@ po automatyczne wdrożenie na AWS, z monitoringiem, centralnymi logami i powiado
 |---|---|
 | Aplikacja | Python 3.13, Flask, Gunicorn, metryki Prometheus |
 | Konteneryzacja | Docker (obraz wieloetapowy), Docker Compose |
-| Infrastruktura jako kod | Terraform (AWS: VPC, EC2, Elastic IP, Security Group, Budżet) + Ansible |
+| Infrastruktura jako kod | Terraform (AWS eu-north-1: VPC, EC2, Elastic IP, Security Group, stan w S3) + Ansible |
 | CI/CD | GitHub Actions, GitHub Container Registry (GHCR) |
 | Load balancing i TLS | Caddy (round robin na 2 repliki, opcjonalnie automatyczny certyfikat Let's Encrypt) |
 | Monitoring | Prometheus, Alertmanager, Grafana, node-exporter, cAdvisor |
@@ -25,7 +25,7 @@ graph LR
     ci -- "main: ansible-playbook" --> ec2
     ci -- wynik --> tg[Telegram]
 
-    subgraph aws[AWS - eu-central-1, tworzone przez Terraform]
+    subgraph aws[AWS - eu-north-1, tworzone przez Terraform]
       subgraph ec2[EC2 Ubuntu 24.04 - konfiguracja Ansible]
         caddy[Caddy<br/>load balancer :80/:443] --> app1[app #1]
         caddy --> app2[app #2]
@@ -144,8 +144,8 @@ Workflowy:
 * Dysk szyfrowany, IMDSv2, kontener aplikacji działa jako użytkownik bez uprawnień roota.
 * HTTPS: ustaw zmienną repozytorium `SITE_ADDRESS` na domenę `tls_domain` z podsumowania workflow Infrastruktura (np. `3-120-45-67.sslip.io`); Caddy sam pobierze certyfikat.
 * **Koszt:** t3.micro, 20 GB gp3 i publiczny adres IP mieszczą się w darmowym pakiecie AWS (Free Plan: kredyty
-  dla nowych kont). `cpu_credits = "standard"` wyklucza dopłaty za CPU, a budżet AWS wysyła e-mail po przekroczeniu
-  1 USD. GitHub Actions i GHCR są darmowe dla publicznych repozytoriów. Po obronie: `make down`.
+  dla nowych kont). `cpu_credits = "standard"` wyklucza dopłaty za CPU. Opcjonalny budżet AWS (zmienna `BUDGET_EMAIL`)
+  wysyła e-mail po przekroczeniu 1 USD. GitHub Actions i GHCR są darmowe dla publicznych repozytoriów. Po obronie: `make down`.
 
 ## Ograniczenia i możliwe rozszerzenia
 

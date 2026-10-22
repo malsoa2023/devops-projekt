@@ -17,7 +17,7 @@ runs:
       shell: bash
       env:
         CREATE_BUCKET: ${{ inputs.create-bucket }}
-        REGION: eu-central-1
+        REGION: eu-north-1
       run: |
         ACCOUNT=$(aws sts get-caller-identity --query Account --output text)
         echo "::add-mask::$ACCOUNT"

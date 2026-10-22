@@ -5,9 +5,9 @@ variable "project_name" {
 }
 
 variable "region" {
-  description = "Region AWS (Frankfurt - najbliżej Polski)"
+  description = "Region AWS (Sztokholm - jedyny region dozwolony przez politykę organizacji konta)"
   type        = string
-  default     = "eu-central-1"
+  default     = "eu-north-1"
 }
 
 variable "instance_type" {

@@ -5,7 +5,7 @@ terraform {
   # Nazwa bucketu podawana przy init: -backend-config="bucket=..."
   backend "s3" {
     key          = "devops-projekt/terraform.tfstate"
-    region       = "eu-central-1"
+    region       = "eu-north-1"
     encrypt      = true
     use_lockfile = true
   }
