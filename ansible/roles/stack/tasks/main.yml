@@ -50,10 +50,17 @@
   changed_when: false
   no_log: true
 
+# Po 2 obrazy naraz - mała instancja (1 GB RAM) nie wytrzymuje rozpakowywania wszystkich równolegle
 - name: Pobierz obrazy kontenerów
   ansible.builtin.command:
     cmd: docker compose pull --quiet
     chdir: "{{ app_dir }}"
+  environment:
+    COMPOSE_PARALLEL_LIMIT: "2"
+  register: pull
+  retries: 3
+  delay: 10
+  until: pull.rc == 0
   changed_when: false
 
 - name: Uruchom stos (tylko zmienione kontenery są tworzone na nowo)
