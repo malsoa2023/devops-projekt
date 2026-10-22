@@ -62,7 +62,8 @@ jobs:
     if: inputs.akcja == 'apply'
     uses: ./.github/workflows/deploy.yml
     with:
-      image_tag: latest
+      # Ten sam tag co w CI/CD (obraz bieżącego commita) - ponowne uruchomienie niczego nie zmienia
+      image_tag: ${{ github.sha }}
     secrets: inherit
 
   notify:
